@@ -15,6 +15,9 @@ func main() {
 	//feedUrl := flag.String("feed-url", "", "Feed URL")
 	//flag.Parse()
 
+	db := NewDatabase()
+	fmt.Println(db)
+
 	fp := gofeed.NewParser()
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
