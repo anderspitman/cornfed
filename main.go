@@ -24,7 +24,6 @@ func main() {
 	flag.Parse()
 
 	db := NewDatabase()
-	fmt.Println(db)
 
 	config := &SmtpConfig{
 		Server:   *smtpServer,
@@ -43,6 +42,25 @@ func main() {
 		fmt.Println(err.Error())
 		return
 	}
+
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+
+		tokenCookie, err := r.Cookie("access_token")
+		if err != nil {
+			w.WriteHeader(403)
+			io.WriteString(w, "Missing access_token")
+			return
+		}
+
+		tokenData, err := db.GetTokenData(tokenCookie.Value)
+		if err != nil {
+			w.WriteHeader(403)
+			io.WriteString(w, "Invalid access_token")
+			return
+		}
+
+		fmt.Println(tokenData)
+	})
 
 	http.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
 		r.ParseForm()
@@ -129,9 +147,22 @@ func main() {
 			return
 		}
 
-		fmt.Println("validated", email)
+		user, err := db.GetUserByEmail(email)
+		if err != nil {
+			err = db.AddUser(email)
+			if err != nil {
+				w.WriteHeader(500)
+				io.WriteString(w, err.Error())
+				return
+			}
+		}
 
-		//db.AddToken(token, email)
+		err = db.AddToken(user.Id, token)
+		if err != nil {
+			w.WriteHeader(500)
+			io.WriteString(w, err.Error())
+			return
+		}
 
 		cookie := &http.Cookie{
 			Name:     "access_token",
@@ -252,4 +283,36 @@ func convert(inFeed *gofeed.Feed) (*feeds.Feed, error) {
 	}
 
 	return outFeed, nil
+}
+
+func sendLoginPage(w http.ResponseWriter, r *http.Request) {
+
+	host := getHost(r)
+
+	curUrl := fmt.Sprintf("https://%s%s", host, r.RequestURI)
+
+	cookie := &http.Cookie{
+		Name:     "return_page",
+		Value:    curUrl,
+		Secure:   true,
+		HttpOnly: true,
+		MaxAge:   86400,
+		Path:     "/",
+		//SameSite: http.SameSiteLaxMode,
+		SameSite: http.SameSiteStrictMode,
+	}
+	http.SetCookie(w, cookie)
+
+	http.Redirect(w, r, "/login", 303)
+}
+
+func getHost(r *http.Request) string {
+	r.ParseForm()
+	host := r.Header.Get("X-Forwarded-Host")
+
+	if host == "" {
+		host = r.Host
+	}
+
+	return host
 }
