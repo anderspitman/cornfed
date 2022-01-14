@@ -7,6 +7,7 @@ import (
 	"html/template"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/gorilla/feeds"
@@ -43,23 +44,34 @@ func main() {
 		return
 	}
 
+	http.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(404)
+	})
+
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 
 		tokenCookie, err := r.Cookie("access_token")
 		if err != nil {
-			w.WriteHeader(403)
-			io.WriteString(w, "Missing access_token")
+			sendLoginPage(w, r)
 			return
 		}
 
 		tokenData, err := db.GetTokenData(tokenCookie.Value)
 		if err != nil {
-			w.WriteHeader(403)
-			io.WriteString(w, "Invalid access_token")
+			sendLoginPage(w, r)
 			return
 		}
 
-		fmt.Println(tokenData)
+		user, err := db.GetUserById(tokenData.UserId)
+		if err != nil {
+			w.WriteHeader(500)
+			io.WriteString(w, err.Error())
+			return
+		}
+
+		url := fmt.Sprintf("/feeds/%s", user.Email)
+		fmt.Println(url)
+		http.Redirect(w, r, url, 303)
 	})
 
 	http.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
@@ -185,7 +197,96 @@ func main() {
 
 	})
 
-	http.HandleFunc("/feeds", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/feeds/", func(w http.ResponseWriter, r *http.Request) {
+
+		tokenCookie, err := r.Cookie("access_token")
+		if err != nil {
+			sendLoginPage(w, r)
+			return
+		}
+		tokenData, err := db.GetTokenData(tokenCookie.Value)
+		if err != nil {
+			sendLoginPage(w, r)
+			return
+		}
+
+		r.ParseForm()
+
+		if r.Method == "POST" {
+			userIdParam := r.Form.Get("user-id")
+			if userIdParam == "" {
+				w.WriteHeader(400)
+				io.WriteString(w, "Missing user-id param")
+				return
+			}
+
+			feedName := r.Form.Get("feed-name")
+			if feedName == "" {
+				w.WriteHeader(400)
+				io.WriteString(w, "Blank feed-name")
+				return
+			}
+
+			userId, err := strconv.Atoi(userIdParam)
+			if err != nil {
+				w.WriteHeader(400)
+				io.WriteString(w, "Invalid user-id param")
+				return
+			}
+
+			if userId != tokenData.UserId {
+				sendLoginPage(w, r)
+				return
+			}
+
+			_, err = db.GetFeed(userId, feedName)
+			if err == nil {
+				w.WriteHeader(400)
+				io.WriteString(w, "Feed exists")
+				return
+			}
+
+			err = db.AddFeed(userId, feedName)
+			if err != nil {
+				w.WriteHeader(400)
+				io.WriteString(w, err.Error())
+				return
+			}
+		}
+
+		user, err := db.GetUserById(tokenData.UserId)
+		if err != nil {
+			w.WriteHeader(500)
+			io.WriteString(w, err.Error())
+			return
+		}
+
+		feeds, err := db.GetFeedsByUserId(tokenData.UserId)
+		if err != nil {
+			w.WriteHeader(500)
+			io.WriteString(w, err.Error())
+			return
+		}
+
+		data := struct {
+			Email  string
+			UserId int
+			Feeds  []*Feed
+		}{
+			Email:  user.Email,
+			UserId: tokenData.UserId,
+			Feeds:  feeds,
+		}
+
+		err = tmpl.ExecuteTemplate(w, "feeds.tmpl", data)
+		if err != nil {
+			w.WriteHeader(400)
+			io.WriteString(w, err.Error())
+			return
+		}
+	})
+
+	http.HandleFunc("/feeds/todo", func(w http.ResponseWriter, r *http.Request) {
 
 		pathParts := strings.Split(r.URL.Path, "/")
 
