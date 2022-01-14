@@ -1,0 +1,14 @@
+{{ template "header.tmpl" . }}
+
+<p>
+  Use the form below to login. If you do not already have an account, one
+  will be created for you automatically.
+</p>
+
+<form class='tn-form' id='login-form' action="/complete-login" method="POST">
+  <label id='login-label' for="email-input">Enter your email address:</label>
+  <input type="email" id="email-input" name="email" required>
+  <button class='button' type="submit">Login</button>
+</form>
+
+{{ template "footer.tmpl" . }}

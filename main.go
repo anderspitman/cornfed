@@ -1,8 +1,10 @@
 package main
 
 import (
-	//"flag"
+	"embed"
+	"flag"
 	"fmt"
+	"html/template"
 	"io"
 	"net/http"
 	"strings"
@@ -11,16 +13,148 @@ import (
 	"github.com/mmcdole/gofeed"
 )
 
+//go:embed templates
+var fs embed.FS
+
 func main() {
-	//feedUrl := flag.String("feed-url", "", "Feed URL")
-	//flag.Parse()
+	smtpServer := flag.String("smtp-server", "", "SMTP Server")
+	smtpUsername := flag.String("smtp-username", "", "SMTP Username")
+	smtpPassword := flag.String("smtp-password", "", "SMTP Password")
+	smtpSender := flag.String("smtp-sender", "", "SMTP Sender")
+	flag.Parse()
 
 	db := NewDatabase()
 	fmt.Println(db)
 
+	config := &SmtpConfig{
+		Server:   *smtpServer,
+		Username: *smtpUsername,
+		Password: *smtpPassword,
+		Sender:   *smtpSender,
+		Port:     587,
+	}
+
+	auth := NewAuth(config)
+
 	fp := gofeed.NewParser()
 
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	tmpl, err := template.ParseFS(fs, "templates/*.tmpl")
+	if err != nil {
+		fmt.Println(err.Error())
+		return
+	}
+
+	http.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+
+		if r.Method != "GET" {
+			w.WriteHeader(405)
+			io.WriteString(w, "Invalid method")
+			return
+		}
+
+		data := struct{}{}
+		err := tmpl.ExecuteTemplate(w, "login.tmpl", data)
+		if err != nil {
+			w.WriteHeader(400)
+			io.WriteString(w, err.Error())
+			return
+		}
+	})
+
+	http.HandleFunc("/complete-login", func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+
+		if r.Method != "POST" {
+			w.WriteHeader(405)
+			io.WriteString(w, "Invalid method")
+			return
+		}
+
+		email := r.Form.Get("email")
+		if email == "" {
+			w.WriteHeader(400)
+			io.WriteString(w, "email param missing")
+			return
+		}
+
+		requestId, err := auth.StartEmailValidation(email)
+		if err != nil {
+			w.WriteHeader(400)
+			io.WriteString(w, err.Error())
+			return
+		}
+
+		data := struct {
+			RequestId string
+		}{
+			RequestId: requestId,
+		}
+
+		err = tmpl.ExecuteTemplate(w, "complete-login.tmpl", data)
+		if err != nil {
+			w.WriteHeader(400)
+			io.WriteString(w, err.Error())
+			return
+		}
+	})
+
+	http.HandleFunc("/complete-email-validation", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			w.WriteHeader(405)
+			io.WriteString(w, "Invalid method")
+			return
+		}
+
+		r.ParseForm()
+
+		requestId := r.Form.Get("request-id")
+		if requestId == "" {
+			w.WriteHeader(400)
+			io.WriteString(w, "request-id param missing")
+			return
+		}
+
+		code := r.Form.Get("code")
+		if requestId == "" {
+			w.WriteHeader(400)
+			io.WriteString(w, "request-id param missing")
+			return
+		}
+
+		token, email, err := auth.CompleteEmailValidation(requestId, code)
+		if err != nil {
+			w.WriteHeader(400)
+			io.WriteString(w, err.Error())
+			return
+		}
+
+		fmt.Println("validated", email)
+
+		//db.AddToken(token, email)
+
+		cookie := &http.Cookie{
+			Name:     "access_token",
+			Value:    token,
+			Secure:   true,
+			HttpOnly: true,
+			MaxAge:   86400 * 365,
+			Path:     "/",
+			SameSite: http.SameSiteLaxMode,
+			//SameSite: http.SameSiteStrictMode,
+		}
+		http.SetCookie(w, cookie)
+
+		returnPageCookie, err := r.Cookie("return_page")
+		if err != nil {
+			http.Redirect(w, r, "/", 303)
+		} else {
+			http.Redirect(w, r, returnPageCookie.Value, 303)
+		}
+
+	})
+
+	http.HandleFunc("/feeds", func(w http.ResponseWriter, r *http.Request) {
 
 		pathParts := strings.Split(r.URL.Path, "/")
 
