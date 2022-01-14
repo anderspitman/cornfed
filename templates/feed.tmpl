@@ -1,0 +1,23 @@
+{{ template "header.tmpl" . }}
+
+{{range $item := .FeedItems}}
+<h2><a href='{{.Link}}'>{{.Title}}</a></h2>
+<div>
+{{.Author.Name}}
+</div>
+<div>
+{{.Updated}}
+{{.Published}}
+</div>
+{{end}}
+
+<h1>Add subfeed</h1>
+
+<form class='tn-form' id='feed-adder' action="/feeds/" method="POST">
+  <input type="hidden" name="feed-id" value="{{.FeedId}}" required>
+  <label for="feed-name-input">Subfeed URL:</label>
+  <input type="text" id="subfeed-url-input" name="subfeed-url" required>
+  <button class='button' type="submit">Submit</button>
+</form>
+
+{{ template "footer.tmpl" . }}

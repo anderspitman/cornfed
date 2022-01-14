@@ -1,0 +1,18 @@
+{{ template "header.tmpl" . }}
+
+{{range $feed := .Feeds}}
+<div>
+  <a href='/feeds/{{$.Email}}/{{.Name}}'>{{.Name}}</a>
+</div>
+{{end}}
+
+<h1>Add feed</h1>
+
+<form class='tn-form' id='feed-adder' action="/feeds/" method="POST">
+  <input type="hidden" name="user-id" value="{{.UserId}}" required>
+  <label for="feed-name-input">Feed name:</label>
+  <input type="text" id="feed-name-input" name="feed-name" required>
+  <button class='button' type="submit">Submit</button>
+</form>
+
+{{ template "footer.tmpl" . }}

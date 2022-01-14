@@ -22,9 +22,10 @@ type Feed struct {
 	Name   string
 }
 
-type FeedMember struct {
+type Subfeed struct {
 	Id     int
 	FeedId int
+	Url    string
 }
 
 type TokenData struct {
@@ -78,7 +79,7 @@ func NewDatabase() *Database {
 	}
 
 	sqlStmt = `
-	CREATE TABLE IF NOT EXISTS feed_members(
+	CREATE TABLE IF NOT EXISTS subfeeds(
                 id INTEGER NOT NULL PRIMARY KEY,
                 feed_id INTEGER,
                 url TEXT,
@@ -178,6 +179,21 @@ func (d *Database) GetFeed(userId int, feedName string) (*Feed, error) {
 	return feed, nil
 }
 
+func (d *Database) GetFeedById(feedId int) (*Feed, error) {
+	stmt := `
+        SELECT * FROM feeds WHERE id=?;
+        `
+	row := d.db.QueryRow(stmt, feedId)
+
+	feed := &Feed{}
+	err := row.Scan(&feed.Id, &feed.UserId, &feed.Name)
+	if err != nil {
+		return nil, err
+	}
+
+	return feed, nil
+}
+
 func (d *Database) GetFeedsByUserId(userId int) ([]*Feed, error) {
 	stmt := `
         SELECT * FROM feeds WHERE user_id=?
@@ -216,6 +232,50 @@ func (d *Database) AddFeed(userId int, feedName string) error {
         INSERT INTO feeds(user_id, name) VALUES(?,?)
         `
 	_, err := d.db.Exec(stmt, userId, feedName)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (d *Database) GetSubfeedsByFeedId(feedId int) ([]*Subfeed, error) {
+	stmt := `
+        SELECT * FROM subfeeds WHERE feed_id=?
+        `
+	rows, err := d.db.Query(stmt, feedId)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var subfeeds []*Subfeed
+
+	for rows.Next() {
+		subfeed := &Subfeed{}
+		if err := rows.Scan(&subfeed.Id, &subfeed.FeedId, &subfeed.Url); err != nil {
+			return nil, err
+		}
+
+		subfeeds = append(subfeeds, subfeed)
+	}
+
+	rerr := rows.Close()
+	if rerr != nil {
+		return nil, err
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return subfeeds, nil
+}
+
+func (d *Database) AddSubfeed(feedId int, url string) error {
+	stmt := `
+        INSERT INTO subfeeds(feed_id, url) VALUES(?,?)
+        `
+	_, err := d.db.Exec(stmt, feedId, url)
 	if err != nil {
 		return err
 	}

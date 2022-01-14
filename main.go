@@ -7,8 +7,10 @@ import (
 	"html/template"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gorilla/feeds"
 	"github.com/mmcdole/gofeed"
@@ -70,7 +72,6 @@ func main() {
 		}
 
 		url := fmt.Sprintf("/feeds/%s", user.Email)
-		fmt.Println(url)
 		http.Redirect(w, r, url, 303)
 	})
 
@@ -214,75 +215,180 @@ func main() {
 
 		if r.Method == "POST" {
 			userIdParam := r.Form.Get("user-id")
-			if userIdParam == "" {
+			feedIdParam := r.Form.Get("feed-id")
+			if userIdParam != "" {
+				feedName := r.Form.Get("feed-name")
+				if feedName == "" {
+					w.WriteHeader(400)
+					io.WriteString(w, "Blank feed-name")
+					return
+				}
+
+				userId, err := strconv.Atoi(userIdParam)
+				if err != nil {
+					w.WriteHeader(400)
+					io.WriteString(w, "Invalid user-id param")
+					return
+				}
+
+				if userId != tokenData.UserId {
+					w.WriteHeader(403)
+					io.WriteString(w, "Unauthorized")
+					return
+				}
+
+				_, err = db.GetFeed(userId, feedName)
+				if err == nil {
+					w.WriteHeader(400)
+					io.WriteString(w, "Feed exists")
+					return
+				}
+
+				err = db.AddFeed(userId, feedName)
+				if err != nil {
+					w.WriteHeader(400)
+					io.WriteString(w, err.Error())
+					return
+				}
+			} else if feedIdParam != "" {
+				feedId, err := strconv.Atoi(feedIdParam)
+				if err != nil {
+					w.WriteHeader(400)
+					io.WriteString(w, "Invalid feed-id param")
+					return
+				}
+
+				feed, err := db.GetFeedById(feedId)
+				if err != nil {
+					w.WriteHeader(400)
+					io.WriteString(w, err.Error())
+					return
+				}
+
+				if feed.UserId != tokenData.UserId {
+					w.WriteHeader(403)
+					io.WriteString(w, "Unauthorized")
+					return
+				}
+
+				user, err := db.GetUserById(tokenData.UserId)
+				if err != nil {
+					w.WriteHeader(500)
+					io.WriteString(w, err.Error())
+					return
+				}
+
+				err = db.AddSubfeed(feedId, r.Form.Get("subfeed-url"))
+				if err != nil {
+					w.WriteHeader(500)
+					io.WriteString(w, err.Error())
+					return
+				}
+
+				url := fmt.Sprintf("/feeds/%s/%s", user.Email, feed.Name)
+				http.Redirect(w, r, url, 303)
+			} else {
 				w.WriteHeader(400)
-				io.WriteString(w, "Missing user-id param")
+				io.WriteString(w, "Invalid /feeds POST")
 				return
 			}
 
-			feedName := r.Form.Get("feed-name")
-			if feedName == "" {
-				w.WriteHeader(400)
-				io.WriteString(w, "Blank feed-name")
-				return
-			}
+			return
+		}
 
-			userId, err := strconv.Atoi(userIdParam)
+		pathParts := strings.Split(r.URL.Path, "/")
+
+		switch len(pathParts) {
+		case 3:
+			user, err := db.GetUserById(tokenData.UserId)
 			if err != nil {
-				w.WriteHeader(400)
-				io.WriteString(w, "Invalid user-id param")
+				w.WriteHeader(500)
+				io.WriteString(w, err.Error())
 				return
 			}
 
-			if userId != tokenData.UserId {
-				sendLoginPage(w, r)
+			feeds, err := db.GetFeedsByUserId(tokenData.UserId)
+			if err != nil {
+				w.WriteHeader(500)
+				io.WriteString(w, err.Error())
 				return
 			}
 
-			_, err = db.GetFeed(userId, feedName)
-			if err == nil {
-				w.WriteHeader(400)
-				io.WriteString(w, "Feed exists")
-				return
+			data := struct {
+				Email  string
+				UserId int
+				Feeds  []*Feed
+			}{
+				Email:  user.Email,
+				UserId: tokenData.UserId,
+				Feeds:  feeds,
 			}
 
-			err = db.AddFeed(userId, feedName)
+			err = tmpl.ExecuteTemplate(w, "feeds.tmpl", data)
 			if err != nil {
 				w.WriteHeader(400)
 				io.WriteString(w, err.Error())
 				return
 			}
-		}
+		case 4:
+			feedName := pathParts[3]
 
-		user, err := db.GetUserById(tokenData.UserId)
-		if err != nil {
-			w.WriteHeader(500)
-			io.WriteString(w, err.Error())
-			return
-		}
+			feed, err := db.GetFeed(tokenData.UserId, feedName)
+			if err != nil {
+				w.WriteHeader(400)
+				io.WriteString(w, err.Error())
+				return
+			}
 
-		feeds, err := db.GetFeedsByUserId(tokenData.UserId)
-		if err != nil {
-			w.WriteHeader(500)
-			io.WriteString(w, err.Error())
-			return
-		}
+			subfeeds, err := db.GetSubfeedsByFeedId(feed.Id)
+			if err != nil {
+				w.WriteHeader(400)
+				io.WriteString(w, err.Error())
+				return
+			}
 
-		data := struct {
-			Email  string
-			UserId int
-			Feeds  []*Feed
-		}{
-			Email:  user.Email,
-			UserId: tokenData.UserId,
-			Feeds:  feeds,
-		}
+			var items []*gofeed.Item
 
-		err = tmpl.ExecuteTemplate(w, "feeds.tmpl", data)
-		if err != nil {
-			w.WriteHeader(400)
-			io.WriteString(w, err.Error())
-			return
+			// TODO: fetch in parallel. Also cache...
+			for _, subfeed := range subfeeds {
+				inFeed, err := fp.ParseURL(subfeed.Url)
+				if err != nil {
+					w.WriteHeader(500)
+					io.WriteString(w, err.Error())
+					return
+				}
+
+				for _, item := range inFeed.Items {
+					if item.Author == nil {
+						if inFeed.Author == nil {
+							item.Author = &gofeed.Person{Name: "Unknown Author"}
+						} else {
+							item.Author = inFeed.Author
+						}
+					}
+
+					item.Published = item.PublishedParsed.Format(time.RFC3339)
+				}
+
+				items = append(items, inFeed.Items...)
+			}
+
+			sort.Sort(ByDate(items))
+
+			data := struct {
+				FeedId    int
+				FeedItems []*gofeed.Item
+			}{
+				FeedId:    feed.Id,
+				FeedItems: items,
+			}
+
+			err = tmpl.ExecuteTemplate(w, "feed.tmpl", data)
+			if err != nil {
+				w.WriteHeader(400)
+				io.WriteString(w, err.Error())
+				return
+			}
 		}
 	})
 
@@ -304,8 +410,6 @@ func main() {
 		} else {
 			feedUrl = "https://" + r.URL.Path[1:]
 		}
-
-		fmt.Println(feedUrl)
 
 		inFeed, err := fp.ParseURL(feedUrl)
 		if err != nil {
@@ -417,3 +521,9 @@ func getHost(r *http.Request) string {
 
 	return host
 }
+
+type ByDate []*gofeed.Item
+
+func (a ByDate) Len() int           { return len(a) }
+func (a ByDate) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByDate) Less(i, j int) bool { return a[i].PublishedParsed.After(*a[j].PublishedParsed) }
