@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/gorilla/feeds"
 	"github.com/mmcdole/gofeed"
@@ -18,7 +19,23 @@ func main() {
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 
-		feedUrl := "https://" + r.URL.Path[1:]
+		pathParts := strings.Split(r.URL.Path, "/")
+
+		if len(pathParts) < 2 {
+			w.WriteHeader(400)
+			io.WriteString(w, "Invalid URL path")
+			return
+		}
+
+		format := pathParts[1]
+
+		var feedUrl string
+		if format == "rss" || format == "json" || format == "atom" {
+			feedUrl = "https://" + strings.Join(pathParts[2:], "/")
+		} else {
+			feedUrl = "https://" + r.URL.Path[1:]
+		}
+
 		fmt.Println(feedUrl)
 
 		inFeed, err := fp.ParseURL(feedUrl)
@@ -35,14 +52,26 @@ func main() {
 			return
 		}
 
-		atom, err := outFeed.ToAtom()
+		var out string
+
+		switch format {
+		case "rss":
+			out, err = outFeed.ToRss()
+		case "json":
+			out, err = outFeed.ToJSON()
+		case "atom":
+			fallthrough
+		default:
+			out, err = outFeed.ToAtom()
+		}
+
 		if err != nil {
 			w.WriteHeader(500)
 			io.WriteString(w, err.Error())
 			return
 		}
 
-		w.Write([]byte(atom))
+		w.Write([]byte(out))
 	})
 
 	http.ListenAndServe(":9004", nil)
