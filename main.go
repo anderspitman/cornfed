@@ -1,31 +1,54 @@
 package main
 
 import (
-	"flag"
+	//"flag"
 	"fmt"
-	"os"
+	"io"
+	"net/http"
 
 	"github.com/gorilla/feeds"
 	"github.com/mmcdole/gofeed"
 )
 
 func main() {
-	feedUrl := flag.String("feed-url", "", "Feed URL")
-	flag.Parse()
+	//feedUrl := flag.String("feed-url", "", "Feed URL")
+	//flag.Parse()
 
 	fp := gofeed.NewParser()
 
-	inFeed, err := fp.ParseURL(*feedUrl)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 
-	for _, item := range inFeed.Items {
-		fmt.Println(item.Title)
-	}
+		feedUrl := "https://" + r.URL.Path[1:]
+		fmt.Println(feedUrl)
 
-	fmt.Println(inFeed.UpdatedParsed)
+		inFeed, err := fp.ParseURL(feedUrl)
+		if err != nil {
+			w.WriteHeader(500)
+			io.WriteString(w, err.Error())
+			return
+		}
+
+		outFeed, err := convert(inFeed)
+		if err != nil {
+			w.WriteHeader(500)
+			io.WriteString(w, err.Error())
+			return
+		}
+
+		atom, err := outFeed.ToAtom()
+		if err != nil {
+			w.WriteHeader(500)
+			io.WriteString(w, err.Error())
+			return
+		}
+
+		w.Write([]byte(atom))
+	})
+
+	http.ListenAndServe(":9004", nil)
+}
+
+func convert(inFeed *gofeed.Feed) (*feeds.Feed, error) {
 
 	outFeed := &feeds.Feed{
 		Title:       inFeed.Title,
@@ -62,11 +85,5 @@ func main() {
 		outFeed.Items = append(outFeed.Items, outItem)
 	}
 
-	atom, err := outFeed.ToAtom()
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-
-	fmt.Println(atom)
+	return outFeed, nil
 }
